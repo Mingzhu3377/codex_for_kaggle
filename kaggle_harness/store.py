@@ -35,6 +35,43 @@ CREATE TABLE IF NOT EXISTS notes(
  run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL,
  summary TEXT NOT NULL, tags_json TEXT NOT NULL, author TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS research_nodes(
+ id TEXT PRIMARY KEY, at TEXT NOT NULL, record_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_annotations(
+ seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
+ at TEXT NOT NULL, record_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS branch_visits(
+ seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
+ at TEXT NOT NULL, reason TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS monitor_state(
+ run_id TEXT PRIMARY KEY REFERENCES runs(id), fingerprint TEXT NOT NULL,
+ changed_at REAL NOT NULL, observed_at REAL NOT NULL, summary_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kaggle_jobs(
+ id TEXT PRIMARY KEY, at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ ref TEXT NOT NULL, account TEXT NOT NULL, status TEXT NOT NULL,
+ record_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kaggle_accounts(
+ name TEXT PRIMARY KEY, config_dir TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_kaggle_ref
+ ON kaggle_jobs(ref,account) WHERE status IN ('launching','queued','running','unknown');
+CREATE TRIGGER IF NOT EXISTS research_no_update BEFORE UPDATE ON research_nodes
+ BEGIN SELECT RAISE(ABORT, 'research nodes are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS research_no_delete BEFORE DELETE ON research_nodes
+ BEGIN SELECT RAISE(ABORT, 'research nodes are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS annotations_no_update BEFORE UPDATE ON run_annotations
+ BEGIN SELECT RAISE(ABORT, 'annotations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS annotations_no_delete BEFORE DELETE ON run_annotations
+ BEGIN SELECT RAISE(ABORT, 'annotations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS visits_no_update BEFORE UPDATE ON branch_visits
+ BEGIN SELECT RAISE(ABORT, 'visits are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS visits_no_delete BEFORE DELETE ON branch_visits
+ BEGIN SELECT RAISE(ABORT, 'visits are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
  BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -68,6 +105,19 @@ class Store:
             self.set_meta("schema_version", 1)
         elif self.get_meta("schema_version") != 1:
             raise HarnessError("Unsupported ledger version")
+        else:
+            # Additive v1 migration: facts and original identities are not rewritten.
+            # executescript is deliberately outside a transaction owned by callers.
+            self.db.executescript(SCHEMA)
+
+    def revision(self) -> int:
+        # Observation ticks do not invalidate an otherwise unchanged research decision.
+        return int(self.db.execute("""SELECT COALESCE(MAX(seq),0) FROM events
+            WHERE kind NOT IN ('monitor_observed','monitor_unavailable')""").fetchone()[0])
+
+    def require_revision(self, expected: int) -> None:
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected != self.revision():
+            raise HarnessError("Stale or missing research revision; read the tree again")
 
     def close(self) -> None:
         self.db.close()

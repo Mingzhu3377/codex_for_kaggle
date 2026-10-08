@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -19,6 +20,17 @@ from typing import Any
 
 class HarnessError(Exception):
     """An actionable validation or operational error."""
+
+
+def redact(text: str, secrets=()) -> str:
+    """Redact known credentials and common token forms before returning tool/log output."""
+    for secret in sorted({str(s) for s in secrets if s and len(str(s)) >= 8}, key=len, reverse=True):
+        text = text.replace(secret, "<redacted>")
+    text = re.sub(r"KGAT_[A-Za-z0-9._-]+", "<redacted>", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._-]+", r"\1<redacted>", text)
+    text = re.sub(r'(?i)((?:api[_-]?token|access[_-]?token|api[_-]?key|password)\s*["\x27]?\s*[:=]\s*["\x27]?)[^\s,"\x27}]+',
+                  r"\1<redacted>", text)
+    return text
 
 
 def now() -> str:
@@ -119,7 +131,7 @@ SECRET_PATTERNS = (".env", ".env.*", "*.pem", "*.key", "auth.json", "kaggle.json
 
 
 def copy_source(source: Path, dest: Path, excluded: list[Path], extra_excludes: list[str],
-                max_bytes: int) -> dict[str, str]:
+                max_bytes: int, *, validate_file=None) -> dict[str, str]:
     """Copy real bytes, including uncommitted changes; never follow links."""
     if not source.is_dir() or source.is_symlink():
         raise HarnessError(f"Not a regular source directory: {source}")
@@ -155,6 +167,8 @@ def copy_source(source: Path, dest: Path, excluded: list[Path], extra_excludes: 
             if total > max_bytes:
                 raise HarnessError("Source snapshot too large. Register data under policy.datasets; "
                                    "exclude checkpoints with policy.snapshot_exclude.")
+            if validate_file is not None:
+                validate_file(p)
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, target)
@@ -259,6 +273,13 @@ def terminate_process(proc: subprocess.Popen, grace: float = 1.5) -> None:
         if proc.poll() is None:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            # Some restricted Windows hosts cannot resolve the PID through taskkill.
+            # Popen still owns a process handle, so terminating our own child remains possible.
+            proc.kill()
+            proc.wait(timeout=2)
         return
     try:
         os.killpg(proc.pid, signal.SIGTERM)

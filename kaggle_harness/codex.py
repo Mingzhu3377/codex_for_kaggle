@@ -26,30 +26,42 @@ ENVELOPE_SCHEMA = {
 }
 
 
-def doctor(binary: str = "codex") -> dict:
-    resolved = shutil.which(binary)
+def doctor(binary: str | list[str] = "codex") -> dict:
+    prefix = [binary] if isinstance(binary, str) else list(binary)
+    if not prefix or any(not isinstance(x, str) or not x for x in prefix):
+        return {"available": False, "message": "Invalid CLI executable prefix"}
+    resolved = shutil.which(prefix[0])
     if not resolved:
         return {"available": False, "binary": binary,
                 "message": "Install/authenticate Codex CLI locally; offline harness tests do not need it."}
     try:
-        version = subprocess.run([resolved, "--version"], capture_output=True, text=True,
+        prefix[0] = resolved
+        version = subprocess.run(prefix + ["--version"], capture_output=True, text=True,
                                  timeout=15, errors="replace")
-        help_result = subprocess.run([resolved, "exec", "--help"], capture_output=True,
+        help_result = subprocess.run(prefix + ["exec", "--help"], capture_output=True,
                                      text=True, timeout=15, errors="replace")
         help_text = help_result.stdout + help_result.stderr
         required = ["--json", "--output-schema", "--output-last-message", "--sandbox",
                     "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "--cd"]
-        return {"available": True, "binary": resolved, "version": version.stdout.strip(),
+        return {"available": version.returncode == 0 and help_result.returncode == 0,
+                "binary": resolved, "argv_prefix": prefix, "version": version.stdout.strip(),
                 "required_flags_present": {flag: flag in help_text for flag in required},
                 "authentication": "not_checked; first ask requires your existing Codex login"}
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "binary": resolved, "message": str(exc)}
 
 
-def example_proposal(h: Harness, *, formal: bool = True) -> dict:
+def example_proposal(h: Harness, *, formal: bool = True, parent_id: str | None = None) -> dict:
     context = h.context()
     champion = context["champion"]
-    if champion:
+    if parent_id:
+        record = h.store.get(parent_id)
+        h.verify(parent_id)
+        if record["status"] != "completed" or record["purpose"] != "experiment":
+            raise HarnessError("Selected parent must be a completed formal experiment")
+        config = dict(record["proposal"]["config"])
+        parent, source = parent_id, "parent"
+    elif champion:
         config = dict(champion["config"])
         parent, source = champion["id"], "parent"
     else:
@@ -66,12 +78,14 @@ def example_proposal(h: Harness, *, formal: bool = True) -> dict:
             "decisions": [{"key": key, "origin": "inherited_default",
                            "reason": "Inherited, not evidence of superiority.", "evidence_ids": []}
                           for key in h.policy["decision_keys"]],
-            "timeout_seconds": min(600., h.policy["max_run_seconds"])}
+            "timeout_seconds": min(600., h.policy["max_run_seconds"],
+                                   context["budget"]["remaining_seconds"])}
 
 
-def ask(h: Harness, objective: str, *, binary: str = "codex", model: str | None = None,
+def ask(h: Harness, objective: str, *, binary: str | list[str] = "codex", model: str | None = None,
         timeout: float = 600, tags: list[str] | None = None,
-        evidence_ids: list[str] | None = None, dry_run: bool = False) -> dict:
+        evidence_ids: list[str] | None = None, dry_run: bool = False,
+        parent_id: str | None = None) -> dict:
     if not objective.strip():
         raise HarnessError("An objective is required")
     if timeout <= 0:
@@ -80,7 +94,12 @@ def ask(h: Harness, objective: str, *, binary: str = "codex", model: str | None 
     sd = h.store.root / "agent_sessions" / session_id
     sd.mkdir()
     context = h.context(tags=tags, evidence_ids=evidence_ids)
-    template = example_proposal(h)
+    template = example_proposal(h, parent_id=parent_id)
+    if parent_id:
+        record = h.store.get(parent_id)
+        context["selected_parent"] = {"id": parent_id, "config": record["proposal"]["config"],
+                                      "metric_value": record["result"]["value"],
+                                      "protocol_hash": record["protocol_hash"]}
     public_policy = {k: v for k, v in h.policy.items() if k not in ("datasets", "pass_env")}
     prompt = """You are the proposal author inside a controlled Kaggle research harness.
 Return the requested JSON envelope. Do not execute experiments, install packages, submit to
@@ -90,7 +109,7 @@ Choose ONE evidence-supported experiment, or stop when none is justified/budget 
 Provide a complete proposal as a JSON string in proposal_json. For stop, use an empty string.
 You may inspect the copied source. Code edits must be returned in proposal.edits as complete
 UTF-8 file contents, using only editable_globs. Do not edit protected_files or the evaluator.
-Prefer source=parent and the champion parent_id to inherit the exact winning source, not a
+Prefer source=parent and selected_parent (when supplied), otherwise the champion parent_id, to inherit frozen source, not a
 possibly drifted workspace. An experiment may also deliberately branch from explicitly
 requested evidence. Never confuse a smoke test with a full experiment. State the observation
 that would refute the hypothesis. Preserve explicit config and parameter origins. Do not
@@ -114,13 +133,15 @@ The output schema enforces only formatting; Python validates semantics and runs 
     with tempfile.TemporaryDirectory(prefix="kh-codex-") as temp:
         temp_root = Path(temp)
         working = temp_root / "workspace"
-        source = (h.store.run_dir(context["champion"]["id"]) / "source") if context["champion"] else h.workspace
+        selected = parent_id or (context["champion"]["id"] if context["champion"] else None)
+        source = h.store.run_dir(selected) / "source" if selected else h.workspace
         copy_source(source, working, [Path(v) for v in h.policy["datasets"].values()],
                     h.policy["snapshot_exclude"], h.policy["snapshot_max_bytes"])
         schema_path = temp_root / "schema.json"
         result_path = temp_root / "reply.json"
         atomic_json(schema_path, ENVELOPE_SCHEMA)
-        argv = [binary, "exec", "--json", "--sandbox", "read-only",
+        prefix = [binary] if isinstance(binary, str) else list(binary)
+        argv = [*prefix, "exec", "--json", "--sandbox", "read-only",
                 "--skip-git-repo-check", "--ignore-user-config", "--ephemeral",
                 "-c", 'approval_policy="never"', "--cd", str(working),
                 "--output-schema", str(schema_path), "--output-last-message", str(result_path)]
@@ -137,7 +158,7 @@ The output schema enforces only formatting; Python validates semantics and runs 
             atomic_json(sd / "outcome.json", {"status": "unavailable", "doctor": available})
             h.store.event("codex_unavailable", {"session_id": session_id, "doctor": available})
             raise HarnessError(f"Codex unavailable/incompatible: {dumps(available)}")
-        argv[0] = available["binary"]
+        argv[:len(prefix)] = available["argv_prefix"]
         atomic_json(sd / "doctor.json", available)
         options = {"start_new_session": True} if os.name != "nt" else {
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -181,17 +202,26 @@ The output schema enforces only formatting; Python validates semantics and runs 
 
 def cycle(h: Harness, objective: str, *, steps: int, execute: bool = False,
           auto_promote: bool = False, binary: str = "codex", model: str | None = None,
-          timeout: float = 600) -> list[dict]:
+          timeout: float = 600, selection: str = "champion") -> list[dict]:
     if not 1 <= steps <= 100:
         raise HarnessError("steps must be between 1 and 100")
+    if selection not in {"champion", "balanced"}:
+        raise HarnessError("selection must be champion or balanced")
     history = []
     evidence_ids = []
     for _ in range(steps):
         if h.store.budget(h.policy)["remaining_seconds"] < 0.1:
             history.append({"decision": "stop", "reason": "wall-time budget exhausted"})
             break
-        answer = ask(h, objective, binary=binary, model=model, timeout=timeout, evidence_ids=evidence_ids)
+        selected = None
+        if selection == "balanced":
+            from .research import select
+            selected = select(h, record_visit=True)
+        answer = ask(h, objective, binary=binary, model=model, timeout=timeout,
+                     evidence_ids=evidence_ids, parent_id=selected["selected"] if selected else None)
         item = {"agent": answer}
+        if selected:
+            item["branch_selection"] = selected
         history.append(item)
         if answer["decision"] == "stop" or not execute:
             break

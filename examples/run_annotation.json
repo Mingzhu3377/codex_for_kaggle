@@ -1,0 +1,9 @@
+{
+  "family": "learning-rate",
+  "operator": "improve",
+  "verdict": "undecided",
+  "failure_layer": null,
+  "reason": "请替换为实际观察及其条件，不把局部指标改进直接写成跨领域有效。",
+  "sources": ["local-only"],
+  "author": "human"
+}

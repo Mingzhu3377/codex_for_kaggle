@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 from pathlib import Path
 import platform
 import sys
 import time
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,12 @@ def main():
     if args.output.exists():
         parser.error("Output directory already exists; use a new one to preserve validation history")
     args.output.mkdir(parents=True)
+    # Keep temporary test writes inside the selected validation workspace on managed hosts.
+    temporary = args.output.resolve() / "tmp"
+    temporary.mkdir()
+    tempfile.tempdir = str(temporary)
+    os.environ["TMP"] = str(temporary)
+    os.environ["TEMP"] = str(temporary)
     log = io.StringIO()
     suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
     started = time.monotonic()
@@ -29,6 +37,7 @@ def main():
                "errors": len(result.errors), "skipped": len(result.skipped),
                "successful": result.wasSuccessful(), "wall_seconds": time.monotonic() - started,
                "python": sys.version, "platform": platform.platform(),
+               "temporary_directory": str(temporary),
                "codex_live_tested": False, "gpu_training_tested": False,
                "test_failures": [{"test": str(t), "traceback": tb} for t, tb in result.failures + result.errors]}
     (args.output / "test-results.json").write_text(json.dumps(summary, indent=2) + "\n")

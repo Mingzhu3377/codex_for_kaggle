@@ -4,12 +4,15 @@ import html
 from pathlib import Path
 
 from .engine import Harness
-from .util import HarnessError, dumps, now
+from .integrity import report_data
+from .research import tree
+from .util import HarnessError, atomic_json, dumps, now
 
 
 def write_report(h: Harness, path: Path) -> dict:
     """Portable local HTML. Does not publish anything or read raw failed-run logs."""
-    if path.exists():
+    data_path = path.with_name(path.name + ".data.json")
+    if path.exists() or data_path.exists():
         raise HarnessError("Report destination already exists; choose a new filename")
     rows = []
     champion = h.store.champion()
@@ -31,7 +34,11 @@ small{opacity:.7}td:first-child{white-space:nowrap}</style>"""
     content += "<table><thead><tr>" + "".join(f"<th>{name}</th>" for name in
         ["Run", "Parent", "Purpose", "Status", "Metric", "Wall seconds", "Hypothesis"]) + "</tr></thead>"
     content += "<tbody>" + "".join(rows) + "</tbody></table>"
+    content += "<h2>Research tree</h2><pre>" + html.escape(dumps(tree(h))) + "</pre>"
+    content += "<p>Structured report data: " + html.escape(data_path.name) + \
+        ". Audit with audit-report; matching numbers do not prove a scientific interpretation.</p>"
     content += "<p>Full experiment files remain in the store. This report does not inject archived failures into model context.</p></html>"
     path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_json(data_path, report_data(h))
     path.write_text(content, encoding="utf-8")
-    return {"path": str(path.resolve()), "rows": len(rows)}
+    return {"path": str(path.resolve()), "data_path": str(data_path.resolve()), "rows": len(rows)}

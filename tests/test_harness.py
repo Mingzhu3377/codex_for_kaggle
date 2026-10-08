@@ -403,7 +403,7 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse(doctor("not-installed-codex")["available"])
 
     def _fake_codex(self, malformed: bool = False):
-        fake = self.root / "fake-codex"
+        fake = self.root / "fake-codex.py"
         p = self.proposal()
         envelope = {"decision": "experiment", "reason": "Mock adapter test, not a live model.",
                     "proposal_json": json.dumps(p)}
@@ -424,9 +424,8 @@ print(json.dumps({{"type":"turn.completed", "test_double":True}}))
 '''
         fake.write_text(code)
         fake.chmod(0o755)
-        return str(fake)
+        return [sys.executable, str(fake)]
 
-    @unittest.skipUnless(os.name == "posix", "Executable fixture uses a POSIX shebang")
     def test_mock_codex_cli_to_validated_proposal(self):
         answer = ask(self.h, "Propose one controlled experiment", binary=self._fake_codex(), timeout=10)
         self.assertEqual(answer["status"], "validated")
@@ -436,7 +435,6 @@ print(json.dumps({{"type":"turn.completed", "test_double":True}}))
         self.assertEqual(p["config"]["optimizer"], "sgd")
         self.assertTrue((Path(answer["directory"]) / "events.jsonl").exists())
 
-    @unittest.skipUnless(os.name == "posix", "Executable fixture uses a POSIX shebang")
     def test_mock_invalid_codex_reply_is_archived_and_rejected(self):
         with self.assertRaises(HarnessError):
             ask(self.h, "Propose one experiment", binary=self._fake_codex(malformed=True), timeout=10)
@@ -446,13 +444,11 @@ print(json.dumps({{"type":"turn.completed", "test_double":True}}))
         self.assertEqual(load_json(sessions[0] / "outcome.json")["status"], "failed")
         self.assertEqual(self.h.store.rows(), [])
 
-    @unittest.skipUnless(os.name == "posix", "Executable fixture uses a POSIX shebang")
     def test_mock_cycle_without_execute_only_proposes(self):
         history = cycle(self.h, "Controlled learning-rate study", steps=3, binary=self._fake_codex())
         self.assertEqual(len(history), 1)
         self.assertEqual(self.h.store.rows(), [])
 
-    @unittest.skipUnless(os.name == "posix", "Executable fixture uses a POSIX shebang")
     def test_mock_cycle_executes_and_gates_promotion(self):
         history = cycle(self.h, "Establish a reproducible baseline", steps=1, execute=True,
                         auto_promote=True, binary=self._fake_codex(), timeout=10)

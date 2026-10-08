@@ -13,7 +13,8 @@ from .contracts import DEFAULT_POLICY
 from .demo import run_demo
 from .engine import Harness
 from .report import write_report
-from .util import HarnessError, atomic_json, load_json
+from . import integrity, kaggle, monitor, research
+from .util import HarnessError, atomic_json, dumps, file_hash, load_json
 
 
 def parser() -> argparse.ArgumentParser:
@@ -62,6 +63,71 @@ def parser() -> argparse.ArgumentParser:
     export.add_argument("--to", type=Path, required=True)
     report = sub.add_parser("report")
     report.add_argument("--output", type=Path, required=True)
+    audit = sub.add_parser("audit-report", help="Compare structured report data with the ledger/archive")
+    audit.add_argument("--data", type=Path, required=True)
+    check = sub.add_parser("check", help="Check SQLite, graph, snapshots, results and remote job manifests")
+    check.add_argument("--shallow", action="store_true")
+    tree_cmd = sub.add_parser("tree", help="Research/experiment graph derived from the single ledger")
+    tree_cmd.add_argument("--output", type=Path)
+    research_add = sub.add_parser("research-add")
+    research_add.add_argument("--record", type=Path, required=True)
+    research_add.add_argument("--revision", type=int, required=True)
+    annotate = sub.add_parser("annotate", help="Append a method/failure interpretation; never changes metrics")
+    annotate.add_argument("id")
+    annotate.add_argument("--record", type=Path, required=True)
+    annotate.add_argument("--revision", type=int, required=True)
+    branch = sub.add_parser("branch-next")
+    branch.add_argument("--reference")
+    branch.add_argument("--record-visit", action="store_true")
+    replay = sub.add_parser("replay", help="Compare recorded-tree exploration policies, without rerunning")
+    replay.add_argument("--budget-seconds", type=float, required=True)
+    replay.add_argument("--steps", type=int, default=100)
+    replay.add_argument("--reference")
+    mon = sub.add_parser("monitor", help="Observe local progress/errors without mutating experiment results")
+    mon.add_argument("id")
+    mon.add_argument("--watch", action="store_true")
+    mon.add_argument("--interval", type=float, default=2)
+    mon.add_argument("--max-polls", type=int, default=30)
+    mon.add_argument("--stale-seconds", type=float, default=60)
+    kg = sub.add_parser("kaggle", help="Capability-checked Kaggle CLI; account aliases contain no tokens")
+    kgsub = kg.add_subparsers(dest="kaggle_action", required=True)
+    for name in ("doctor", "quota", "accounts", "account-add", "competitions", "files", "pages",
+                 "topics", "kernels", "status", "logs", "launch", "poll", "jobs", "collect", "pull", "reconcile"):
+        cmd = kgsub.add_parser(name)
+        cmd.add_argument("--kaggle-bin", default="kaggle")
+        cmd.add_argument("--account")
+        cmd.add_argument("--cli-timeout", type=float, default=30)
+        if name == "account-add":
+            cmd.add_argument("name")
+            cmd.add_argument("--config-dir", type=Path, required=True)
+            cmd.add_argument("--default", action="store_true")
+        if name in ("files", "pages", "topics"):
+            cmd.add_argument("competition")
+        if name in ("status", "logs"):
+            cmd.add_argument("ref")
+        if name in ("competitions", "kernels"):
+            cmd.add_argument("--search")
+            cmd.add_argument("--limit", type=int, default=10)
+            if name == "kernels":
+                cmd.add_argument("--competition")
+        if name == "launch":
+            cmd.add_argument("--folder", type=Path, required=True)
+            cmd.add_argument("--timeout-seconds", type=int, default=3600)
+            cmd.add_argument("--accelerator")
+            cmd.add_argument("--execute", action="store_true")
+        if name == "poll":
+            cmd.add_argument("job_id")
+        if name == "reconcile":
+            cmd.add_argument("job_id")
+            cmd.add_argument("--version", type=int, required=True)
+            cmd.add_argument("--reason", required=True)
+        if name == "collect":
+            cmd.add_argument("competition")
+            cmd.add_argument("--output", type=Path, required=True)
+            cmd.add_argument("--limit", type=int, default=10)
+        if name == "pull":
+            cmd.add_argument("ref")
+            cmd.add_argument("--output", type=Path, required=True)
     context = sub.add_parser("context", help="Export compact active evidence without raw archived logs")
     context.add_argument("--tag", action="append", default=[])
     context.add_argument("--evidence", action="append", default=[])
@@ -86,10 +152,12 @@ def parser() -> argparse.ArgumentParser:
             agent.add_argument("--dry-run", action="store_true")
             agent.add_argument("--tag", action="append", default=[])
             agent.add_argument("--evidence", action="append", default=[])
+            agent.add_argument("--parent", help="Inspect/propose from this completed frozen parent")
         else:
             agent.add_argument("--steps", type=int, default=1)
             agent.add_argument("--execute", action="store_true", help="Explicitly authorize experiment execution")
             agent.add_argument("--promote", action="store_true", help="Explicitly enable gated auto-promotion")
+            agent.add_argument("--selection", choices=["champion", "balanced"], default="champion")
     return p
 
 
@@ -108,6 +176,53 @@ def dispatch(args):
     if c == "policy-template":
         new_json(args.output, DEFAULT_POLICY)
         return {"path": str(args.output.resolve())}
+    if c == "kaggle":
+        h = Harness(Path(args.store)) if args.store else None
+        try:
+            action = args.kaggle_action
+            if action in ("accounts", "account-add", "jobs", "poll", "reconcile") or (action == "launch" and args.execute):
+                if h is None:
+                    raise HarnessError("This Kaggle operation requires --store")
+            if action == "accounts":
+                return kaggle.accounts(h)
+            if action == "account-add":
+                return kaggle.add_account(h, args.name, args.config_dir, make_default=args.default)
+            if action == "jobs":
+                return [kaggle._job(h, r[0]) for r in h.store.db.execute("SELECT id FROM kaggle_jobs ORDER BY at,id")]
+            if args.account and h is None:
+                raise HarnessError("--account requires an initialized store with account aliases")
+            account, directory = kaggle.account_directory(h, args.account) if h else ("environment", None)
+            cli = kaggle.KaggleCLI(args.kaggle_bin, config_dir=directory, account=account, timeout=args.cli_timeout)
+            if action == "doctor":
+                return cli.doctor()
+            if action == "launch":
+                return kaggle.launch(h, cli, args.folder, timeout_seconds=args.timeout_seconds,
+                                     accelerator=args.accelerator, execute=args.execute)
+            if action == "poll":
+                return kaggle.poll(h, cli, args.job_id)
+            if action == "reconcile":
+                return kaggle.bind_version(h, cli, args.job_id, args.version, args.reason)
+            if action == "collect":
+                result = kaggle.collect(cli, args.competition, args.output, limit=args.limit)
+                if h:
+                    record = {"kind": "research", "title": "Kaggle source collection",
+                              "summary": dumps(result["coverage"]) + "; " + result["limitations"],
+                              "parents": [], "sources": [str(args.output.resolve() / "manifest.json"),
+                                                        f"https://www.kaggle.com/competitions/{result['competition']}"],
+                              "evidence_files": [{"path": str(args.output.resolve() / name),
+                                                  "sha256": file_hash(args.output.resolve() / name)}
+                                                 for name in [*result["files"], "manifest.json"]],
+                              "author": "collector"}
+                    result["research_node"] = research.add_node(h, record, h.store.revision())
+                return result
+            if action == "pull":
+                return kaggle.pull(cli, args.ref, args.output)
+            return cli.query(action, competition=getattr(args, "competition", None),
+                             ref=getattr(args, "ref", None), search=getattr(args, "search", None),
+                             limit=getattr(args, "limit", 10))
+        finally:
+            if h:
+                h.close()
     if not args.store:
         raise HarnessError("Pass --store PATH before the subcommand, or set KH_STORE")
     if c == "init":
@@ -157,6 +272,30 @@ def dispatch(args):
             return h.export(args.id, args.to)
         if c == "report":
             return write_report(h, args.output)
+        if c == "check":
+            return integrity.check(h, deep=not args.shallow)
+        if c == "audit-report":
+            return integrity.audit_report(h, load_json(args.data))
+        if c == "tree":
+            result = research.tree(h)
+            if args.output:
+                new_json(args.output, result)
+            return result
+        if c == "research-add":
+            return research.add_node(h, load_json(args.record), args.revision)
+        if c == "annotate":
+            return research.annotate(h, args.id, load_json(args.record), args.revision)
+        if c == "branch-next":
+            return research.select(h, args.reference, record_visit=args.record_visit)
+        if c == "replay":
+            return research.replay(h, budget_seconds=args.budget_seconds, steps=args.steps, reference=args.reference)
+        if c == "monitor":
+            if args.watch:
+                for observation in monitor.watch(h, args.id, interval=args.interval, max_polls=args.max_polls,
+                                                 stale_seconds=args.stale_seconds):
+                    print(json.dumps(observation, ensure_ascii=False, allow_nan=False), flush=True)
+                return {"watch": "finished", "run_id": args.id}
+            return monitor.observe(h, args.id, stale_seconds=args.stale_seconds)
         if c == "context":
             return h.context(args.tag, args.evidence)
         if c == "note":
@@ -170,12 +309,13 @@ def dispatch(args):
                 return {"run_id": args.id, "log": name, "tail": "".join(deque(stream, maxlen=args.tail))}
         if c == "ask":
             return ask(h, args.objective, binary=args.codex_bin, model=args.model, timeout=args.timeout,
-                       dry_run=args.dry_run, tags=args.tag, evidence_ids=args.evidence)
+                       dry_run=args.dry_run, tags=args.tag, evidence_ids=args.evidence, parent_id=args.parent)
         if c == "cycle":
             if args.promote and not args.execute:
                 raise HarnessError("--promote requires --execute")
             return cycle(h, args.objective, steps=args.steps, execute=args.execute,
-                         auto_promote=args.promote, binary=args.codex_bin, model=args.model, timeout=args.timeout)
+                         auto_promote=args.promote, binary=args.codex_bin, model=args.model, timeout=args.timeout,
+                         selection=args.selection)
         raise HarnessError(f"Unknown command: {c}")
 
 
@@ -184,6 +324,11 @@ def main(argv=None) -> int:
     try:
         result = dispatch(args)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if isinstance(result, dict) and result.get("ok") is False:
+            return 1
+        if args.command == "kaggle" and isinstance(result, dict):
+            if result.get("available") is False or result.get("status") in ("unknown", "failed", "error"):
+                return 1
         if args.command == "run" and result["status"] != "completed":
             return 1
         if args.command == "cycle" and any(x.get("status") not in (None, "completed") for x in result):

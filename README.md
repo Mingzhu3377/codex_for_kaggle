@@ -1,4 +1,4 @@
-# Kaggle Research Harness · v0.1.0
+# Kaggle Research Harness · v0.2.0
 
 **让 Codex 提出研究决策，让程序保存实验事实。**
 
@@ -12,7 +12,7 @@
 
 ```bash
 python -m kaggle_harness --help
-python -m unittest discover -s tests -v
+python scripts/validate.py --output validation-local/run-001
 python -m kaggle_harness demo --output ../my-harness-demo
 ```
 
@@ -207,7 +207,16 @@ SQLite 的事务负责运行认领、并发限制、预算预留和 Champion 更
 
 已经实现：实验登记与状态机、代码/参数/数据来源记录、全流程运行、曲线 Recorder、固定评估协议、失败保留、最佳版本晋升、恢复导出、按需证据、Codex 适配器和有界循环。
 
-本版**没有**自动抓 Kaggle Code/Discussion、自动提交比赛、多机/Slurm 调度、真实 JTS 实现、代理 Transformer 实现或统计显著性判定。它们是后续可接入的研究层，不伪装成已经完成的功能。
+v0.2 增加了研究树、分支选择与历史回放、自动本地日志观察、报告数据对账，以及 Kaggle CLI 工具层。
+Kaggle 工具层支持多账号配置目录引用、配额、比赛/文件/讨论/Notebook 索引、页面正文、Notebook 源码下载、
+并行资料采集和显式授权的私有 Notebook 启动/精确版本状态跟踪。远端完成状态不自动成为正式实验分数。
+完整命令、账号边界和恢复方式见 [研究与 Kaggle 工作流](docs/RESEARCH_AND_KAGGLE.md)。
+
+本版没有自动匹配或下载 Skill、自动提交比赛、多机/Slurm 调度、真实 JTS/代理 Transformer 实现或统计显著性判定。
+跨领域 trick 继续通过文档积累，由研究者判断迁移。
+
+`validation/REPORT_ZH.md` 保留 v0.1 的原始验证范围。v0.2 的本机测试与实连记录见
+[本次验证报告](validation/UPGRADE_20261008.md)；不得将 CLI 查询验证说成 GPU 训练或实际模型能力验证。
 
 **这是单机、可信研究代码场景的可靠性控制器，不是恶意代码安全沙箱。** 目录分离、哈希、SQLite 触发器和参数校验能防很多误操作，但不能阻止同一系统用户的任意代码直接访问文件或绕过程序。需要抗恶意代码、硬性冷档案读隔离、验证数据防泄漏或网络隔离时，必须再用不同系统身份/容器/虚拟机落实权限；详细边界见 `docs/SECURITY_AND_LIMITS.md`。
 

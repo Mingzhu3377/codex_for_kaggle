@@ -1,0 +1,8 @@
+{
+  "kind": "hypothesis",
+  "title": "状态与候选动作交互",
+  "summary": "当固定摘要不能区分候选价值时，检查状态编码与候选内容能否形成交互。保留候选内部的执行顺序；具体迁移由研究者判断。",
+  "parents": [],
+  "sources": ["local-only"],
+  "author": "human"
+}

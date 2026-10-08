@@ -256,6 +256,7 @@ class Harness:
         rd = self.store.run_dir(run_id)
         argv = [part.replace("{python}", sys.executable) for part in command]
         self.store.event("stage_started", {"stage": name, "argv": argv}, run_id)
+        next_observation = 0.0
         popen_options = {"start_new_session": True} if os.name != "nt" else {
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         with (rd / f"{name}.stdout.log").open("xb", buffering=0) as stdout, \
@@ -268,6 +269,9 @@ class Harness:
                     if time.monotonic() >= deadline:
                         raise RunTimedOut()
                     self._heartbeat(run_id, proc)
+                    if time.monotonic() >= next_observation:
+                        self._observe(run_id)
+                        next_observation = time.monotonic() + 2.0
                     time.sleep(0.1)
                 code = proc.returncode
             finally:
@@ -278,6 +282,14 @@ class Harness:
                 os.fsync(stderr.fileno())
         self.store.event("stage_finished", {"stage": name, "exit_code": code}, run_id)
         return code
+
+    def _observe(self, run_id: str) -> None:
+        from .monitor import observe
+        try:
+            observe(self, run_id)
+        except (HarnessError, OSError, ValueError) as exc:
+            # Monitoring is advisory; an observation failure must not become a fake training failure.
+            self.store.event("monitor_unavailable", {"error": str(exc)}, run_id)
 
     def _training_checks(self, rd: Path, proposal: dict) -> dict:
         output = rd / "output"
@@ -416,7 +428,8 @@ class Harness:
         finally:
             for sig, handler in old_handlers.items():
                 signal.signal(sig, handler)
-            self._finish(run_id, status, result, error, time.monotonic() - started)
+        self._finish(run_id, status, result, error, time.monotonic() - started)
+        self._observe(run_id)
         return self.store.get(run_id)
 
     def compare(self, left_id: str, right_id: str) -> dict:
@@ -520,9 +533,11 @@ class Harness:
             run = self.store.get(rid)
             explicit.append({"id": rid, "status": run["status"], "proposal": run["proposal"],
                              "result": run["result"], "error": run["error"]})
+        from .research import compact
         return {"competition_id": self.policy["competition_id"], "champion": brief_champion,
                 "budget": self.store.budget(self.policy), "status_counts": counts,
                 "active_notes": notes, "explicitly_requested_evidence": explicit,
+                "research_brief": compact(self),
                 "archive_policy": "Raw logs and failed experiment details excluded by default"}
 
     def export(self, run_id: str, destination: Path) -> dict:

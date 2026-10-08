@@ -8,3 +8,5 @@ dist/
 .env.*
 *.sqlite3*
 .pytest_cache/
+validation-local/
+.local/
