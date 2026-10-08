@@ -1,0 +1,7 @@
+{
+  "optimizer": "sgd",
+  "learning_rate": 0.002,
+  "steps": 40,
+  "seed": 17,
+  "failure_mode": "none"
+}

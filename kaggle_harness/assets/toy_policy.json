@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "competition_id": "toy-regression",
+  "metric": {
+    "name": "mse",
+    "direction": "minimize",
+    "min_improvement": 1e-06
+  },
+  "validation_id": "synthetic-holdout-two-folds-v1",
+  "fold_ids": [
+    "0",
+    "1"
+  ],
+  "train_command": [
+    "{python}",
+    "train.py"
+  ],
+  "evaluate_command": [
+    "{python}",
+    "evaluate.py"
+  ],
+  "protected_files": [
+    "evaluate.py"
+  ],
+  "editable_globs": [
+    "train.py",
+    "models/*.py",
+    "features/*.py"
+  ],
+  "snapshot_exclude": [
+    "outputs/*",
+    "checkpoints/*",
+    "*.ipynb"
+  ],
+  "snapshot_max_bytes": 100000000,
+  "datasets": {
+    "train": "data/train.csv",
+    "validation": "data/validation.csv"
+  },
+  "required_artifacts": [
+    "model.json"
+  ],
+  "decision_keys": [
+    "optimizer",
+    "learning_rate",
+    "steps",
+    "seed"
+  ],
+  "training_budget_key": "steps",
+  "min_formal_steps": 20,
+  "allow_early_stopping": false,
+  "max_run_seconds": 30.0,
+  "total_wall_seconds": 300.0,
+  "max_concurrent_runs": 1,
+  "allocated_gpus": 0,
+  "pass_env": []
+}

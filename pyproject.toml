@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaggle-research-harness"
+version = "0.1.0"
+description = "A local, evidence-first experiment harness with an optional Codex adapter"
+requires-python = ">=3.10"
+dependencies = []
+license = {text = "MIT"}
+
+[project.scripts]
+kh = "kaggle_harness.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kaggle_harness*"]
+
+[tool.setuptools.package-data]
+kaggle_harness = ["assets/*.json", "assets/toy_competition/*.py", "assets/toy_competition/*.json", "assets/toy_competition/data/*.csv"]
