@@ -1,0 +1,7 @@
+{
+  "author": "human",
+  "conditions": "State the task, input shape, insertion point, initialization, seed, training budget and validation split.",
+  "failure_layer": null,
+  "outcome": "undecided",
+  "reason": "State the observation and the comparison that supports it, or why evidence is insufficient."
+}

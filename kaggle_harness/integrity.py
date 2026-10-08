@@ -18,12 +18,15 @@ def _verify_result(h, run):
 
 
 def report_data(h) -> dict:
+    from .module_usage import bindings
     rows = []
     for run in h.store.rows(limit=1000000):
         rows.append({"id": run["id"], "parent_id": run["parent_id"], "status": run["status"],
                      "purpose": run["purpose"], "value": run["result"]["value"] if run["result"] else None,
                      "protocol_hash": run["protocol_hash"],
-                     "artifacts": run["result"].get("sealed_files", {}) if run["result"] else {}})
+                     "artifacts": run["result"].get("sealed_files", {}) if run["result"] else {},
+                     "modules": [{"module_id": b["module_id"], "content_hash": b["content_hash"],
+                                  "binding_hash": b["binding_hash"]} for b in bindings(h, run["id"])]})
     return {"schema_version": 1, "competition_id": h.policy["competition_id"],
             "metric": h.policy["metric"], "champion": tree(h)["champion"], "runs": rows,
             "scientific_significance": "not_assessed",
@@ -44,7 +47,7 @@ def audit_report(h, document: dict) -> dict:
     seen = set()
     required = {"id", "parent_id", "status", "purpose", "value", "protocol_hash", "artifacts"}
     for row in document["runs"]:
-        if not isinstance(row, dict) or set(row) != required:
+        if not isinstance(row, dict) or not required.issubset(row) or set(row)-required-{"modules"}:
             errors.append("Malformed report row")
             continue
         rid = row["id"]
@@ -60,6 +63,11 @@ def audit_report(h, document: dict) -> dict:
                         "purpose": run["purpose"], "value": run["result"]["value"] if run["result"] else None,
                         "protocol_hash": run["protocol_hash"],
                         "artifacts": run["result"].get("sealed_files", {}) if run["result"] else {}}
+            from .module_usage import bindings
+            refs = bindings(h, rid)
+            if "modules" in row or refs:
+                expected["modules"] = [{"module_id": b["module_id"], "content_hash": b["content_hash"],
+                                        "binding_hash": b["binding_hash"]} for b in refs]
             if row != expected:
                 errors.append(f"{rid}: report numbers/status/artifacts differ from the ledger")
             if run["snapshot_hash"]:

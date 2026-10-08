@@ -70,7 +70,7 @@ def example_proposal(h: Harness, *, formal: bool = True, parent_id: str | None =
             raise HarnessError("Create workspace/config.json with explicit baseline parameters first")
         config = load_json(path)
         parent, source = None, "workspace"
-    return {"schema_version": 1, "parent_id": parent, "source": source,
+    proposal = {"schema_version": 1, "parent_id": parent, "source": source,
             "purpose": "experiment" if formal else "smoke_test",
             "hypothesis": "Replace this with a falsifiable experiment hypothesis.",
             "expected_observation": "Replace this with the expected diagnostic observation.",
@@ -80,12 +80,18 @@ def example_proposal(h: Harness, *, formal: bool = True, parent_id: str | None =
                           for key in h.policy["decision_keys"]],
             "timeout_seconds": min(600., h.policy["max_run_seconds"],
                                    context["budget"]["remaining_seconds"])}
+    if parent:
+        from .module_usage import inherited_refs
+        refs = inherited_refs(h, parent)
+        if refs:
+            proposal["modules"] = refs
+    return proposal
 
 
 def ask(h: Harness, objective: str, *, binary: str | list[str] = "codex", model: str | None = None,
         timeout: float = 600, tags: list[str] | None = None,
         evidence_ids: list[str] | None = None, dry_run: bool = False,
-        parent_id: str | None = None) -> dict:
+        parent_id: str | None = None, module_ids: list[str] | None = None) -> dict:
     if not objective.strip():
         raise HarnessError("An objective is required")
     if timeout <= 0:
@@ -95,6 +101,18 @@ def ask(h: Harness, objective: str, *, binary: str | list[str] = "codex", model:
     sd.mkdir()
     context = h.context(tags=tags, evidence_ids=evidence_ids)
     template = example_proposal(h, parent_id=parent_id)
+    from .module_usage import copy_selected_sources, selected_context
+    module_ids = module_ids or []
+    context["selected_modules"] = selected_context(h, module_ids)
+    if module_ids:
+        context["selected_module_source_paths"] = copy_selected_sources(h, module_ids, sd / "module_sources")
+    permitted_modules = set(module_ids) | {r["module_id"] for r in template.get("modules", [])}
+    if template.get("modules"):
+        parent = template["parent_id"]
+        context["inherited_module_cards"] = [load_json(h.store.run_dir(parent) / "modules" / ref["module_id"] / "module.json")["card"]
+                                            for ref in template["modules"]]
+        if len(dumps(context["inherited_module_cards"])) > 64000:
+            raise HarnessError("Inherited module cards exceed context budget")
     if parent_id:
         record = h.store.get(parent_id)
         context["selected_parent"] = {"id": parent_id, "config": record["proposal"]["config"],
@@ -118,6 +136,16 @@ not a reason to erase a record. Logs not supplied in context are not available e
 Study the actual training pipeline; do not propose a config key that the code ignores.
 Code or config changes must be scientifically motivated, not made to game evaluation.
 The output schema enforces only formatting; Python validates semantics and runs everything.
+When modules are explicitly selected, read their actual frozen source files and interface
+conditions. Reuse those bytes before adapting; do not recreate a named module from memory.
+Only selected_modules or inherited proposal.modules IDs may be referenced. Optional
+proposal.modules items contain module_id, files:[{source,target}], adaptation, and mode:
+copy (mount the selected frozen version before edits) or inherit (preserve the parent's
+already adapted files and its mapping). Keep inherit for existing parent modules unless
+a selected version is deliberately substituted. Code edits run AFTER module copying.
+Omitting modules inherits parent references; an explicit empty list clears active references.
+Registration/syntax checks do not establish paper fidelity or effectiveness. Case outcomes
+are conditional human/model interpretations, not universal bans or causal proof.
 \nOBJECTIVE:\n""" + objective + "\n\nPOLICY:\n" + dumps(public_policy) + \
         "\n\nCURRENT EVIDENCE:\n" + dumps(context) + \
         "\n\nPROPOSAL SHAPE (replace hypothesis/config/etc):\n" + dumps(template)
@@ -185,7 +213,13 @@ The output schema enforces only formatting; Python validates semantics and runs 
             if response["decision"] == "experiment":
                 raw = sd / "proposal.json"
                 raw.write_text(response["proposal_json"], encoding="utf-8")
-                h.validate(load_json(raw))
+                proposed = h.validate(load_json(raw))
+                if any(r["module_id"] not in permitted_modules for r in proposed.get("modules", [])):
+                    raise HarnessError("Codex referenced a module that was not selected or inherited")
+                for ref in proposed.get("modules", []):
+                    if ref.get("mode", "copy") == "copy" and ref["module_id"] not in module_ids:
+                        raise HarnessError("Explicit module selection is required to replace inherited source")
+                atomic_json(raw, proposed)
                 response["proposal_path"] = str(raw)
             response.pop("proposal_json")
             response.update({"session_id": session_id, "status": "validated", "directory": str(sd)})
@@ -202,7 +236,7 @@ The output schema enforces only formatting; Python validates semantics and runs 
 
 def cycle(h: Harness, objective: str, *, steps: int, execute: bool = False,
           auto_promote: bool = False, binary: str = "codex", model: str | None = None,
-          timeout: float = 600, selection: str = "champion") -> list[dict]:
+          timeout: float = 600, selection: str = "champion", module_ids: list[str] | None = None) -> list[dict]:
     if not 1 <= steps <= 100:
         raise HarnessError("steps must be between 1 and 100")
     if selection not in {"champion", "balanced"}:
@@ -218,7 +252,8 @@ def cycle(h: Harness, objective: str, *, steps: int, execute: bool = False,
             from .research import select
             selected = select(h, record_visit=True)
         answer = ask(h, objective, binary=binary, model=model, timeout=timeout,
-                     evidence_ids=evidence_ids, parent_id=selected["selected"] if selected else None)
+                     evidence_ids=evidence_ids, parent_id=selected["selected"] if selected else None,
+                     module_ids=module_ids)
         item = {"agent": answer}
         if selected:
             item["branch_selection"] = selected

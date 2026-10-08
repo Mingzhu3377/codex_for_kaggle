@@ -1,10 +1,12 @@
-# Kaggle Research Harness · v0.2.0
+# Kaggle Research Harness · v0.3.0
 
-**让 Codex 提出研究决策，让程序保存实验事实。**
+**积累真正用过、改过的模块，让 Codex 基于实现提出决策，让程序保存实验事实。**
 
-这是一个可运行的本地 Python 实验控制器，不依赖 Skills 是否触发。第一版围绕四件事建立约束：**每次运行都有身份和记录；两轮测试不能冒充完整实验；最佳版本不被下一次改动覆盖；完整失败档案不默认塞进模型上下文。**
+第三版把长期积累的模块实现放在中心：参考源码、输入输出与适用条件、你改过的变体，以及具体任务里的成功/失败解释一起保存。一个共享模块库可以连接多个赛事；每次实验冻结实际选用的版本和适配代码。模块名称、论文标题和语法通过都不能代替真正的实现与实验。
 
-运行依赖：Python 3.10+，核心和测试仅用标准库。Codex CLI 是可选接入：不安装它也能运行实验、故障测试、报告和示例。本次实际验证环境与结果见 `validation/`；真实 Codex 调用及原生 Windows/GPU 路径不计入已验证范围。
+已有的实验账本、固定评估、预算、失败保留和 Champion 机制继续使用。模块由研究者明确选择；不自动匹配、安装或下载 Skills，也不让模型仅凭名字重新编写复杂模块。实现和命令见 [模块积累与复用](docs/MODULE_LIBRARY.md)。
+
+运行依赖：Python 3.10+，核心和测试仅用标准库。Codex CLI 是可选接入。v0.3 在原生 Windows/Python 3.14 上验证了本地 CPU、模块复用与打包路径；真实 Codex 模型调用、YUE 模块的 PyTorch 前后向和 GPU 训练不计入本次验证范围。记录见 [第三版验证报告](validation/UPGRADE_0.3_20261008.md)。
 
 ## 1. 先跑起来
 
@@ -13,10 +15,13 @@
 ```bash
 python -m kaggle_harness --help
 python scripts/validate.py --output validation-local/run-001
+python -m kaggle_harness module-demo --output ../my-module-demo
 python -m kaggle_harness demo --output ../my-harness-demo
 ```
 
-`../my-harness-demo` 必须是**尚不存在**的目录，重复运行请换名字。程序不会为了演示而删除你的历史结果。整个示例在本机 CPU 上进行，不调用模型、不联网、不提交 Kaggle。
+两个示例都要求**尚不存在**的输出目录，重复运行请换名字。它们在本机 CPU 上进行，不调用模型、不联网、不提交 Kaggle。
+
+`module-demo` 实际调用冻结的线性/二次特征模块训练，通过受保护的检查和独立评估，记录条件性案例，再将父版本、变体和案例迁移到第二个合成任务。它演示模块积累的完整路径，不代表 Kaggle 或 SOTA 成绩。原有 `demo` 继续验证实验与故障恢复路径。
 
 这个示例不是伪造分数：它实际执行 **清洗 CSV → 用训练集统计量标准化 → SGD 训练 → 固定验证集评估 → 保存产物**，然后注入崩溃、两轮提前结束和超时。数据是随项目附带的合成回归数据，不是 Kaggle 比赛数据。
 
@@ -169,6 +174,15 @@ python -m kaggle_harness --store ../competition-state ask --objective "基于当
 
 返回结果包含 `proposal_path`。检查提案后，把该路径传给 `run --proposal`。每次调用的 prompt、原始事件、stderr、原始响应和校验结果都保存在 `agent_sessions/`，错误响应也不丢弃。
 
+接入共享模块库后，明确选中实现再请求提案：
+
+```bash
+python -m kaggle_harness --store ../competition-state --library ../module-library module attach
+python -m kaggle_harness --store ../competition-state ask --module M-实际版本ID --objective "阅读这个实现，检查接口与初始化，提出一次有基线的适配实验"
+```
+
+被选中的模块会提供实际冻结源码、卡片和至多 8 条条件性案例。默认不扫描整个库。父实验的适配实现会沿分支继承；原始参考不会悄悄覆盖已经改过的代码。完整提案契约与 `copy`/`inherit` 行为见 [模块文档](docs/MODULE_LIBRARY.md)。
+
 明确授权有限轮数后，可以运行程序控制的循环：
 
 ```bash
@@ -212,11 +226,14 @@ Kaggle 工具层支持多账号配置目录引用、配额、比赛/文件/讨�
 并行资料采集和显式授权的私有 Notebook 启动/精确版本状态跟踪。远端完成状态不自动成为正式实验分数。
 完整命令、账号边界和恢复方式见 [研究与 Kaggle 工作流](docs/RESEARCH_AND_KAGGLE.md)。
 
+v0.3 增加共享模块库、不可覆盖的实现版本与父子变体、实验源码绑定、跨任务使用索引、条件性案例、携带父版本的导入导出，以及可选的任务专用 preflight。库登记只检查源码与语法；真实接口/数值/梯度检查由赛事的受保护脚本执行，收益仍由同协议实验判断。
+
 本版没有自动匹配或下载 Skill、自动提交比赛、多机/Slurm 调度、真实 JTS/代理 Transformer 实现或统计显著性判定。
-跨领域 trick 继续通过文档积累，由研究者判断迁移。
+跨领域 trick 可通过文档与实际模块源码一起积累，由研究者判断迁移。私有参考材料的许可和贡献者信息保留原状，不因登记而变成项目的 MIT 代码。
 
 `validation/REPORT_ZH.md` 保留 v0.1 的原始验证范围。v0.2 的本机测试与实连记录见
 [本次验证报告](validation/UPGRADE_20261008.md)；不得将 CLI 查询验证说成 GPU 训练或实际模型能力验证。
+第三版的 review 与兼容性记录见 [v0.3 review](docs/REVIEW_0.3_20261008.md) 和 [v0.3 验证](validation/UPGRADE_0.3_20261008.md)。
 
 **这是单机、可信研究代码场景的可靠性控制器，不是恶意代码安全沙箱。** 目录分离、哈希、SQLite 触发器和参数校验能防很多误操作，但不能阻止同一系统用户的任意代码直接访问文件或绕过程序。需要抗恶意代码、硬性冷档案读隔离、验证数据防泄漏或网络隔离时，必须再用不同系统身份/容器/虚拟机落实权限；详细边界见 `docs/SECURITY_AND_LIMITS.md`。
 
@@ -229,12 +246,17 @@ kaggle_harness/
   store.py        # SQLite 账本、事件、笔记、事务
   contracts.py    # 严格提案与策略校验
   recorder.py     # 训练端曲线与配置记录
+  modules.py      # 共享模块版本、父子关系、条件性案例和导入导出
+  module_usage.py # 明确选取、实际源码复制、继承与实验绑定
+  preflight.py    # 任务专用检查结果契约
   codex.py        # CLI 适配器、只读提案、有界循环
   util.py         # 原子写入、哈希、路径与进程工具
   report.py       # 本地 HTML 报告
   demo.py         # 可运行的端到端验证
+  module_demo.py  # 实际模块调用、变体与跨任务迁移验证
 examples/         # 完整 CPU 训练/评估和策略示例
 tests/           # 标准库 unittest 测试（包含实际中断、并发与故障）
 docs/             # 协议、架构、安全边界、官方接口来源
+scripts/          # 完整测试与显式的本地文档源码导入
 validation/       # 本次交付的真实验证记录
 ```

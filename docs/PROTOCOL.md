@@ -37,6 +37,8 @@
 
 `decisions` 至少覆盖 policy.decision_keys。`validated` 必须引用已完成的正式实验；这只校验来源存在，不自动证明因果关系。
 
+v0.3 允许可选 `modules`，其他未知键仍拒绝。每项包含 `module_id`、明确的 `files` 映射、`adaptation` 和可选 `mode`（默认 copy）。从 parent 分支省略该字段会继承适配实现与来源，显式空数组清除活跃绑定。详见 [模块契约](MODULE_LIBRARY.md)。旧提案继续兼容。
+
 ## 执行环境变量
 
 | 变量 | 含义 |
@@ -49,8 +51,13 @@
 | KH_PROTOCOL_HASH | 固定评估/数据/seed 协议指纹 |
 | KH_FOLD_IDS | 预期 fold ID 列表 |
 | KH_PURPOSE | smoke_test 或 experiment |
+| KH_PREFLIGHT_OUTPUT | 可选任务检查报告路径 |
+| KH_MODULE_BINDINGS_FILE | 模块来源绑定 JSON；无模块时文件不存在 |
+| KH_SOURCE_ROOT | 当前阶段的源码副本目录 |
 
 训练脚本不通过数据库写事实；Recorder 只写本实验产物。控制器负责将检查后的结果记入账本。
+
+可选策略字段 `preflight_command` 接受 null 或 argv，检查脚本应加入 protected_files。报告与阻断规则见 [preflight](MODULE_LIBRARY.md#任务专用-preflight)。旧策略不含该字段时保持原协议哈希，启用时命令纳入协议。
 
 ## 训练结果
 

@@ -11,9 +11,12 @@ from . import __version__
 from .codex import ask, cycle, doctor, example_proposal
 from .contracts import DEFAULT_POLICY
 from .demo import run_demo
+from .module_demo import run_module_demo
 from .engine import Harness
 from .report import write_report
 from . import integrity, kaggle, monitor, research
+from . import module_usage
+from .modules import ModuleLibrary, card_template
 from .util import HarnessError, atomic_json, dumps, file_hash, load_json
 
 
@@ -22,6 +25,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--store", type=Path, default=os.environ.get("KH_STORE"),
                    help="External experiment store; alternatively set KH_STORE")
+    p.add_argument("--library", type=Path, default=os.environ.get("KH_MODULE_LIBRARY"),
+                   help="Shared source-backed module library; selected explicitly")
     sub = p.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="Initialize a NEW store outside the code workspace")
     init.add_argument("--workspace", type=Path, required=True)
@@ -31,6 +36,8 @@ def parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo", help="Run a real CPU demo plus fault injections")
     demo.add_argument("--output", type=Path, required=True)
     demo.add_argument("--examples", type=Path)
+    module_demo = sub.add_parser("module-demo", help="Run actual module variants, preflight, cases and cross-task reuse on CPU")
+    module_demo.add_argument("--output", type=Path, required=True)
     doc = sub.add_parser("doctor", help="Check optional Codex CLI capabilities")
     doc.add_argument("--codex-bin", default="codex")
     prop = sub.add_parser("proposal", help="Write an editable proposal; does not start training")
@@ -89,6 +96,32 @@ def parser() -> argparse.ArgumentParser:
     mon.add_argument("--interval", type=float, default=2)
     mon.add_argument("--max-polls", type=int, default=30)
     mon.add_argument("--stale-seconds", type=float, default=60)
+    module = sub.add_parser("module", help="Manually maintained module source/variant/case library")
+    modsub = module.add_subparsers(dest="module_action", required=True)
+    for name in ("init", "attach", "template", "add", "list", "show", "verify", "check", "diff", "export", "import", "cases", "case-add", "uses", "bindings"):
+        cmd = modsub.add_parser(name)
+        if name == "template":
+            cmd.add_argument("--output", type=Path, required=True)
+        if name == "add":
+            cmd.add_argument("--card", type=Path, required=True)
+            cmd.add_argument("--folder", type=Path, required=True)
+        if name in ("show", "verify", "export", "cases", "case-add", "uses", "bindings"):
+            cmd.add_argument("id")
+        if name == "list":
+            cmd.add_argument("--family")
+            cmd.add_argument("--tag")
+            cmd.add_argument("--limit", type=int, default=100)
+        if name == "diff":
+            cmd.add_argument("parent")
+            cmd.add_argument("candidate")
+        if name == "export":
+            cmd.add_argument("--to", type=Path, required=True)
+        if name == "import":
+            cmd.add_argument("--folder", type=Path, required=True)
+        if name == "case-add":
+            cmd.add_argument("--run", required=True)
+            cmd.add_argument("--record", type=Path, required=True)
+            cmd.add_argument("--baseline")
     kg = sub.add_parser("kaggle", help="Capability-checked Kaggle CLI; account aliases contain no tokens")
     kgsub = kg.add_subparsers(dest="kaggle_action", required=True)
     for name in ("doctor", "quota", "accounts", "account-add", "competitions", "files", "pages",
@@ -131,6 +164,7 @@ def parser() -> argparse.ArgumentParser:
     context = sub.add_parser("context", help="Export compact active evidence without raw archived logs")
     context.add_argument("--tag", action="append", default=[])
     context.add_argument("--evidence", action="append", default=[])
+    context.add_argument("--module", action="append", default=[], help="Explicitly selected module version")
     note = sub.add_parser("note")
     note.add_argument("--run")
     note.add_argument("--text", required=True)
@@ -139,7 +173,7 @@ def parser() -> argparse.ArgumentParser:
     note.add_argument("--kind", choices=["interpretation", "hypothesis", "decision"], default="interpretation")
     logs = sub.add_parser("logs")
     logs.add_argument("id")
-    logs.add_argument("--stage", choices=["train", "evaluate"], default="train")
+    logs.add_argument("--stage", choices=["train", "evaluate", "preflight"], default="train")
     logs.add_argument("--stderr", action="store_true")
     logs.add_argument("--tail", type=int, default=50)
     for name in ("ask", "cycle"):
@@ -148,6 +182,7 @@ def parser() -> argparse.ArgumentParser:
         agent.add_argument("--codex-bin", default="codex")
         agent.add_argument("--model")
         agent.add_argument("--timeout", type=float, default=600.)
+        agent.add_argument("--module", action="append", default=[], help="Read this frozen module's actual source")
         if name == "ask":
             agent.add_argument("--dry-run", action="store_true")
             agent.add_argument("--tag", action="append", default=[])
@@ -169,6 +204,56 @@ def new_json(path: Path, value) -> None:
 
 def dispatch(args):
     c = args.command
+    if c == "module-demo":
+        return run_module_demo(args.output)
+    if c == "module":
+        action = args.module_action
+        if action == "template":
+            new_json(args.output, card_template())
+            return {"path": str(args.output.resolve()), "executed": False}
+        if action == "bindings":
+            if not args.store:
+                raise HarnessError("module bindings requires --store")
+            with Harness(Path(args.store)) as h:
+                h.verify(args.id)
+                return module_usage.bindings(h, args.id)
+        if not args.library:
+            raise HarnessError("module requires --library PATH or KH_MODULE_LIBRARY")
+        if action == "init":
+            with ModuleLibrary(args.library, create=True) as lib:
+                return {"library": str(lib.root), "status": "initialized"}
+        if action in ("attach", "case-add"):
+            if not args.store:
+                raise HarnessError("This module operation requires --store")
+            with Harness(Path(args.store)) as h:
+                if action == "attach":
+                    return module_usage.attach(h, args.library)
+                with ModuleLibrary(args.library) as lib:
+                    return lib.add_case(h, args.id, load_json(args.record), run_id=args.run, baseline_id=args.baseline)
+        with ModuleLibrary(args.library) as lib:
+            if action == "add":
+                return lib.add(load_json(args.card), args.folder)
+            if action == "list":
+                return lib.list(family=args.family, tag=args.tag, limit=args.limit)
+            if action == "show":
+                record = lib.verify(args.id)
+                return {**record, "source_directory": str(lib.source(args.id))}
+            if action == "verify":
+                r = lib.verify(args.id)
+                return {"ok": True, "module_id": r["id"], "content_hash": r["content_hash"], "checks": r["static_checks"]}
+            if action == "check":
+                return lib.check()
+            if action == "diff":
+                return lib.diff(args.parent, args.candidate)
+            if action == "export":
+                return lib.export(args.id, args.to)
+            if action == "import":
+                return lib.import_bundle(args.folder)
+            if action == "cases":
+                return lib.cases(args.id)
+            if action == "uses":
+                return lib.uses(args.id)
+        raise HarnessError("Unknown module operation")
     if c == "doctor":
         return doctor(args.codex_bin)
     if c == "demo":
@@ -297,7 +382,9 @@ def dispatch(args):
                 return {"watch": "finished", "run_id": args.id}
             return monitor.observe(h, args.id, stale_seconds=args.stale_seconds)
         if c == "context":
-            return h.context(args.tag, args.evidence)
+            context = h.context(args.tag, args.evidence)
+            context["selected_modules"] = module_usage.selected_context(h, args.module)
+            return context
         if c == "note":
             return {"note_id": h.store.note(args.run, args.text, args.tag, args.author, args.kind)}
         if c == "logs":
@@ -309,13 +396,14 @@ def dispatch(args):
                 return {"run_id": args.id, "log": name, "tail": "".join(deque(stream, maxlen=args.tail))}
         if c == "ask":
             return ask(h, args.objective, binary=args.codex_bin, model=args.model, timeout=args.timeout,
-                       dry_run=args.dry_run, tags=args.tag, evidence_ids=args.evidence, parent_id=args.parent)
+                       dry_run=args.dry_run, tags=args.tag, evidence_ids=args.evidence, parent_id=args.parent,
+                       module_ids=args.module)
         if c == "cycle":
             if args.promote and not args.execute:
                 raise HarnessError("--promote requires --execute")
             return cycle(h, args.objective, steps=args.steps, execute=args.execute,
                          auto_promote=args.promote, binary=args.codex_bin, model=args.model, timeout=args.timeout,
-                         selection=args.selection)
+                         selection=args.selection, module_ids=args.module)
         raise HarnessError(f"Unknown command: {c}")
 
 

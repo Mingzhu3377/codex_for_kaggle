@@ -17,6 +17,7 @@ DEFAULT_POLICY = {
     "fold_ids": ["0"],
     "train_command": ["{python}", "train.py"],
     "evaluate_command": ["{python}", "evaluate.py"],
+    "preflight_command": None,
     "protected_files": ["evaluate.py"],
     "editable_globs": ["train.py", "models/*.py", "features/*.py"],
     "snapshot_exclude": ["outputs/*", "checkpoints/*", "*.ipynb"],
@@ -38,7 +39,7 @@ DEFAULT_POLICY = {
 def validate_policy(policy: dict) -> dict:
     if not isinstance(policy, dict):
         raise HarnessError("Policy must be an object")
-    missing = set(DEFAULT_POLICY) - set(policy)
+    missing = set(DEFAULT_POLICY) - {"preflight_command"} - set(policy)
     unknown = set(policy) - set(DEFAULT_POLICY)
     if missing or unknown:
         raise HarnessError(f"Policy keys: missing={sorted(missing)}, unknown={sorted(unknown)}")
@@ -71,6 +72,10 @@ def validate_policy(policy: dict) -> dict:
         command = policy[key]
         if not isinstance(command, list) or not command or any(not isinstance(x, str) or not x for x in command):
             raise HarnessError(f"{key} must be a nonempty argv list, not a shell command")
+    preflight = policy.get("preflight_command")
+    if preflight is not None and (not isinstance(preflight, list) or not preflight or
+                                  any(not isinstance(x, str) or not x for x in preflight)):
+        raise HarnessError("preflight_command must be null or a nonempty argv list")
     if not isinstance(policy["datasets"], dict) or any(not isinstance(k, str) or not k or
             not isinstance(v, str) or not v for k, v in policy["datasets"].items()):
         raise HarnessError("datasets must map names to paths")
@@ -89,10 +94,10 @@ def validate_policy(policy: dict) -> dict:
 def validate_proposal(p: dict, policy: dict) -> dict:
     required = {"schema_version", "parent_id", "source", "purpose", "hypothesis",
                 "expected_observation", "config", "decisions", "edits", "timeout_seconds"}
-    if not isinstance(p, dict) or set(p) != required:
+    if not isinstance(p, dict) or not required.issubset(p) or set(p)-required-{"modules"}:
         actual = set(p) if isinstance(p, dict) else set()
         raise HarnessError(f"Proposal keys: missing={sorted(required - actual)}, "
-                           f"unknown={sorted(actual - required)}")
+                           f"unknown={sorted(actual - required - {'modules'})}")
     if p["schema_version"] != 1:
         raise HarnessError("Unsupported proposal schema_version")
     if p["parent_id"] is not None and (not isinstance(p["parent_id"], str) or not p["parent_id"]):

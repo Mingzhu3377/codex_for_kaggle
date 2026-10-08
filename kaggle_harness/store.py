@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS kaggle_jobs(
 CREATE TABLE IF NOT EXISTS kaggle_accounts(
  name TEXT PRIMARY KEY, config_dir TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS module_bindings(
+ run_id TEXT NOT NULL REFERENCES runs(id), module_id TEXT NOT NULL,
+ record_json TEXT NOT NULL, PRIMARY KEY(run_id,module_id)
+);
+CREATE TRIGGER IF NOT EXISTS bindings_no_update BEFORE UPDATE ON module_bindings
+ BEGIN SELECT RAISE(ABORT, 'module bindings are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS bindings_no_delete BEFORE DELETE ON module_bindings
+ BEGIN SELECT RAISE(ABORT, 'module bindings are immutable'); END;
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_kaggle_ref
  ON kaggle_jobs(ref,account) WHERE status IN ('launching','queued','running','unknown');
 CREATE TRIGGER IF NOT EXISTS research_no_update BEFORE UPDATE ON research_nodes

@@ -1,0 +1,36 @@
+{
+  "author": "human",
+  "family": "replace-with-method-family",
+  "interface": {
+    "constraints": [],
+    "inputs": "Input shape and meaning",
+    "invariants": [],
+    "outputs": "Output shape and meaning"
+  },
+  "limitations": [
+    "No task-level effectiveness is established by registration."
+  ],
+  "mechanism": "Describe what the actual source computes.",
+  "name": "Replace with a version name",
+  "parents": [],
+  "provenance": {
+    "contributors": [
+      "Record actual contributors or explicitly unknown"
+    ],
+    "license": "Record the source license or explicitly unknown",
+    "references": [
+      {
+        "locator": "file/class/section",
+        "revision": "Record a commit or source SHA-256",
+        "source": "local-only"
+      }
+    ]
+  },
+  "schema_version": 1,
+  "tags": [],
+  "usage": {
+    "adaptation_notes": "Record adaptations; an unchanged reference is also valid.",
+    "initialization": "Describe the actual initialization",
+    "insertion_points": []
+  }
+}

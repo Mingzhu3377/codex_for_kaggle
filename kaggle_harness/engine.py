@@ -81,16 +81,24 @@ class Harness:
         return cls(root)
 
     def _protocol_hash(self, data: dict, seed: int) -> str:
-        return digest({"competition_id": self.policy["competition_id"],
+        protocol = {"competition_id": self.policy["competition_id"],
                        "validation_id": self.policy["validation_id"],
                        "metric": self.policy["metric"]["name"],
                        "direction": self.policy["metric"]["direction"],
                        "fold_ids": self.policy["fold_ids"],
                        "protected_files": self.store.get_meta("protected_hashes"),
                        "evaluate_command": self.policy["evaluate_command"],
-                       "datasets": dataset_digest(data), "seed": seed})
+                       "datasets": dataset_digest(data), "seed": seed}
+        if self.policy.get("preflight_command") is not None:
+            protocol["preflight_command"] = self.policy["preflight_command"]
+        return digest(protocol)
 
     def validate(self, proposal: dict) -> dict:
+        from .module_usage import inherited_refs, validate_refs
+        if isinstance(proposal, dict) and "modules" not in proposal and proposal.get("source") == "parent" and proposal.get("parent_id"):
+            refs = inherited_refs(self, proposal["parent_id"])
+            if refs:
+                proposal = dict(proposal, modules=refs)
         p = validate_proposal(proposal, self.policy)
         if p["parent_id"] is not None:
             parent = self.store.get(p["parent_id"])
@@ -105,6 +113,7 @@ class Harness:
                     evidence["status"] != "completed" or evidence["purpose"] != "experiment"
                 ):
                     raise HarnessError("Validated decisions must reference completed formal experiments")
+        validate_refs(self, p.get("modules", []), p)
         return p
 
     def register(self, proposal: dict) -> str:
@@ -136,11 +145,15 @@ class Harness:
             excluded = [Path(x) for x in self.policy["datasets"].values()]
             copy_source(source, rd / "source", excluded, self.policy["snapshot_exclude"],
                         self.policy["snapshot_max_bytes"])
+            from .module_usage import freeze_before_edits, finish_bindings
+            module_bindings = freeze_before_edits(self, run_id, p.get("modules", []))
             for edit in p["edits"]:
                 target = rd / "source" / safe_relative(edit["path"])
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(edit["content"], encoding="utf-8")
             source_manifest = tree_manifest(rd / "source")
+            if sum((rd / "source" / rel).stat().st_size for rel in source_manifest) > self.policy["snapshot_max_bytes"]:
+                raise HarnessError("Combined competition/module source exceeds snapshot size limit")
             for rel, expected in self.store.get_meta("protected_hashes").items():
                 if source_manifest.get(rel) != expected:
                     raise HarnessError(f"Protected evaluator/protocol file changed: {rel}")
@@ -159,6 +172,7 @@ class Harness:
                                            "code": code_diff})
             snapshot_hash = digest({"source": source_manifest, "config": p["config"], "datasets": data})
             protocol_hash = self._protocol_hash(data, p["config"]["seed"])
+            finish_bindings(self, run_id, module_bindings)
             with self.store.transaction():
                 self.store.db.execute("""UPDATE runs SET status='ready', updated_at=?, snapshot_hash=?,
                   protocol_hash=?, owner_pid=NULL,owner_token=NULL,heartbeat=NULL WHERE id=? AND status='preparing'""",
@@ -184,6 +198,8 @@ class Harness:
         actual = digest({"source": source, "config": config, "datasets": data})
         if actual != run["snapshot_hash"]:
             raise HarnessError(f"Snapshot manifest integrity check failed: {run_id}")
+        from .module_usage import verify_bindings
+        verify_bindings(self, run_id)
         checked = 0
         if include_artifacts and run["status"] == "completed":
             result = run["result"]
@@ -247,6 +263,9 @@ class Harness:
                     "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
                     "KH_RUN_ID": rd.name, "KH_CONFIG": str(rd / "requested_config.json"),
                     "KH_OUTPUT_DIR": str(rd / "output"), "KH_EVAL_OUTPUT": str(rd / "evaluation.json"),
+                    "KH_PREFLIGHT_OUTPUT": str(rd / "preflight.json"),
+                    "KH_MODULE_BINDINGS_FILE": str(rd / "module_bindings.json"),
+                    "KH_SOURCE_ROOT": str(rd / "train_work"),
                     "KH_DATASETS_JSON": dumps(self.policy["datasets"]),
                     "KH_PROTOCOL_HASH": protocol_hash, "KH_FOLD_IDS": dumps(self.policy["fold_ids"])})
         return env
@@ -388,15 +407,35 @@ class Harness:
                 "allocated_gpus": self.policy["allocated_gpus"], "command_env_keys": sorted(self._environment(rd, run["protocol_hash"]))})
             env = self._environment(rd, run["protocol_hash"])
             env["KH_PURPOSE"] = run["purpose"]
+            preflight = None
+            expected_source = load_json(rd / "source_manifest.json")
+            if self.policy.get("preflight_command"):
+                shutil.copytree(rd / "source", rd / "preflight_work")
+                preflight_env = dict(env, KH_SOURCE_ROOT=str(rd / "preflight_work"))
+                code = self._stage(run_id, "preflight", self.policy["preflight_command"],
+                                   rd / "preflight_work", preflight_env, deadline)
+                if code != 0:
+                    raise RunIncomplete("Preflight process failed; training was not started")
+                from .preflight import validate_preflight
+                preflight = validate_preflight(load_json(rd / "preflight.json"))
+                if tree_manifest(rd / "preflight_work") != expected_source:
+                    raise RunIncomplete("Preflight changed its source files")
+                atomic_json(rd / "preflight_verified.json", {"snapshot_hash": run["snapshot_hash"],
+                            "report_sha256": file_hash(rd / "preflight.json"), "report": preflight,
+                            "scope": "Reported checks for exact frozen source; method effectiveness is not established"})
+                if tree_manifest(rd / "train_work") != expected_source:
+                    raise RunIncomplete("Preflight changed the training source copy")
             train_code = self._stage(run_id, "train", self.policy["train_command"], rd / "train_work", env, deadline)
             if train_code != 0:
                 raise RuntimeError(f"Training exited with code {train_code}; inspect train.stderr.log")
             summary = self._training_checks(rd, run["proposal"])
+            if preflight is not None and tree_manifest(rd / "train_work") != expected_source:
+                raise RunIncomplete("Training changed source after preflight")
             # Evaluate in a clean copy; training-side code writes do not become evaluator edits.
-            expected_source = load_json(rd / "source_manifest.json")
             if tree_manifest(rd / "eval_work") != expected_source:
                 raise RunIncomplete("Evaluation workspace changed before evaluation")
-            eval_code = self._stage(run_id, "evaluate", self.policy["evaluate_command"], rd / "eval_work", env, deadline)
+            eval_env = dict(env, KH_SOURCE_ROOT=str(rd / "eval_work"))
+            eval_code = self._stage(run_id, "evaluate", self.policy["evaluate_command"], rd / "eval_work", eval_env, deadline)
             if eval_code != 0:
                 raise RuntimeError(f"Evaluation exited with code {eval_code}; inspect evaluate.stderr.log")
             if time.monotonic() >= deadline:
@@ -413,6 +452,10 @@ class Harness:
                 seals["output/" + rel] = checksum
             for name in ("train.stdout.log", "train.stderr.log", "evaluate.stdout.log", "evaluate.stderr.log"):
                 seals[name] = file_hash(rd / name)
+            if preflight is not None:
+                for name in ("preflight.json", "preflight_verified.json", "preflight.stdout.log", "preflight.stderr.log"):
+                    seals[name] = file_hash(rd / name)
+                result["preflight"] = preflight
             result["training"] = summary
             result["sealed_files"] = seals
             result["allocated_gpu_seconds_estimate"] = (time.monotonic() - started) * self.policy["allocated_gpus"]

@@ -1,0 +1,72 @@
+{
+  "automatic_skill_matching": false,
+  "codex_live_model_tested": false,
+  "date": "2026-10-08",
+  "environment": {
+    "platform": "Windows 11 10.0.26200",
+    "python": "3.14.2"
+  },
+  "gpu_training_tested": false,
+  "installed_legacy_demo": {
+    "champion_survived_failures": true,
+    "failure_statuses": {
+      "crash": "failed",
+      "short": "incomplete",
+      "timeout": "timed_out"
+    },
+    "smoke_promotion_blocked": true
+  },
+  "legacy_compatibility": {
+    "deep": true,
+    "errors": [],
+    "existing_facts_unchanged": true,
+    "legacy_report_audit": {
+      "errors": [],
+      "ok": true,
+      "runs_checked": 6,
+      "scope": "Structured numbers, coverage and artifacts; narrative scientific claims still need review"
+    },
+    "nodes_checked": 8,
+    "ok": true,
+    "old_protocols_unchanged": true,
+    "protocols_checked": 6,
+    "revision": 62,
+    "runs_checked": 6,
+    "warnings": []
+  },
+  "local_document_registration": {
+    "all_extracted_code_bytes_match": true,
+    "original_document_unchanged": true,
+    "private_sources_published": false,
+    "pytorch_forward_backward_tested": false,
+    "versions": 26
+  },
+  "module_demo": {
+    "competition_score": false,
+    "imported_cases": 1,
+    "imported_versions": 2,
+    "library_checks_passed": true,
+    "task_a_baseline_mse": 0.8759929149929948,
+    "task_a_candidate_mse": 3.092429783872646e-05,
+    "task_b_mse": 3.096726402242961e-05,
+    "task_b_outcome": "undecided",
+    "tasks_deep_checks_passed": true
+  },
+  "package": {
+    "all_source_and_asset_bytes_match": true,
+    "bytes": 87023,
+    "files_compared": 30,
+    "wheel": "kaggle_research_harness-0.3.0-py3-none-any.whl",
+    "wheel_sha256": "78a04269488c6ef75e0719264e531557cc81c2965e8094c8992959665daefd1c"
+  },
+  "remote_kaggle_training_tested": false,
+  "tests": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 3,
+    "successful": true,
+    "tests_run": 138,
+    "wall_seconds": 89.59537350013852
+  },
+  "version": "0.3.0"
+}

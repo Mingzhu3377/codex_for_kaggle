@@ -35,6 +35,18 @@ small{opacity:.7}td:first-child{white-space:nowrap}</style>"""
         ["Run", "Parent", "Purpose", "Status", "Metric", "Wall seconds", "Hypothesis"]) + "</tr></thead>"
     content += "<tbody>" + "".join(rows) + "</tbody></table>"
     content += "<h2>Research tree</h2><pre>" + html.escape(dumps(tree(h))) + "</pre>"
+    from .module_usage import bindings
+    module_rows = []
+    for run in h.store.rows(limit=10000):
+        for binding in bindings(h, run["id"]):
+            values = [run["id"], binding["module_id"], binding["name"], binding["family"],
+                      binding["mode"], binding["adaptation"]]
+            module_rows.append("<tr>" + "".join(f"<td>{html.escape(v)}</td>" for v in values) + "</tr>")
+    if module_rows:
+        content += "<h2>Module source bindings</h2><table><thead><tr>" + "".join(
+            f"<th>{name}</th>" for name in ["Run", "Module version", "Name", "Family", "Source mode", "Adaptation"])
+        content += "</tr></thead><tbody>" + "".join(module_rows) + "</tbody></table>"
+        content += "<p>Bindings identify frozen source and adaptations; they do not prove runtime adoption or causal effectiveness.</p>"
     content += "<p>Structured report data: " + html.escape(data_path.name) + \
         ". Audit with audit-report; matching numbers do not prove a scientific interpretation.</p>"
     content += "<p>Full experiment files remain in the store. This report does not inject archived failures into model context.</p></html>"

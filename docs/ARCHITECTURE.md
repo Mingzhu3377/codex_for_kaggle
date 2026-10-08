@@ -10,6 +10,8 @@
                               |
               register -> snapshot -> atomic run claim
                               |
+                optional task-specific preflight
+                              |
                training subprocess + persistent recorder
                               |
             separate clean evaluator + completeness checks
@@ -43,7 +45,7 @@ preparing -> ready -> running -> completed
 
 **压缩解释**：研究笔记记录现象、机制性判断、当前 hypothesis；带作者与来源 ID，不修改原始事实。
 
-**模型视图**：Champion、预算、状态计数、相关压缩笔记，以及用户/控制器明确选中的 evidence ID。默认不把失败配置、数值、曲线、原始错误堆叠进 prompt。
+**模型视图**：Champion、预算、状态计数、相关压缩笔记，以及明确选中的 evidence ID 和模块源码/卡片/条件性案例。默认不扫描模块库或把完整失败档案堆叠进 prompt。
 
 `context --evidence` 可以明确取出失败实验详情。此选取机制是上下文管理，不是操作系统层面的禁止读取。
 
@@ -59,11 +61,17 @@ SQLite `BEGIN IMMEDIATE` 保护运行认领、并发/预算检查和 Champion �
 
 数据库事务与文件系统不构成一个统一的分布式事务。本版通过先登记、原子 JSON 写入、可校验的快照和 recover 标记减少不一致，不声称断电/磁盘损坏时万无一失。实际部署应备份账本与产物。
 
-## 扩展位置（不是本版已实现功能）
+## 共享模块库
+
+`ModuleLibrary` 在赛事外保存源码版本、父子关系和条件性案例；`module_usage` 将明确选中的版本复制进实验快照，再应用适配 edits。原始参考与最终执行源码分别冻结、共同校验。父分支保留已经适配过的实现，不将原始参考覆盖回来。
+
+使用索引只指向各赛事账本；案例是带冻结来源的人工解释，不是第二份实验事实或 Champion。离线参考库不妨碍已冻结实验的验证与继承。登记检查语法而不执行源码，可选 preflight 在赛事固定脚本中检查实际接入实现，在训练前阻断失败。详见 [模块文档](MODULE_LIBRARY.md)。
+
+## 其他扩展位置
 
 Kaggle News：先在独立采集层清洗来源、版本、分数、验证条件和成本，产出简短证据笔记或显式上下文，再进入提案阶段。不直接把未审查 notebook 当执行命令。
 
-Module bank：为 JTS、代理模型等登记适用条件、输入输出、实现版本、验证证据和失败条件；检索到模块后仍通过同一实验入口验证。当前没有编造你的 JTS 或宝可梦 Transformer 实现。
+模块实现：已有模块库不代替具体模型研究。登记 JTS、代理模型或宝可梦 Transformer 时需要真实源码、许可和接口，当前未编造这些实现。
 
 调参器：可以用优化器替代 Codex 的参数建议，只要产生相同提案即可。程序化搜索和 LLM reasoning 共用同一账本，不需要绑定特定 Agent 框架。
 
